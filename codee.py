@@ -9,8 +9,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-GEMINI_KEY = os.getenv('GEMINI_KEY')
-GROQ_KEY = os.getenv('GROQ_KEY')
+GEMINI_KEY = st.secrets.get("GEMINI_KEY")
+GROQ_KEY = st.secrets.get("GROQ_KEY")
 
 if not GEMINI_KEY or not GROQ_KEY:
     st.error("API keys not found")
