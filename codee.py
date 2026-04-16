@@ -159,7 +159,7 @@ def read_pdf(file_obj):
     result = md.convert(file_obj)
     text = result.text_content
     if not text or not text.strip():
-        raise ValueError("No text extracted from the PDF.")
+        raise ValueError("No text extracted from the Document.")
     return text
 
 def search(question, index, chunks, top_k=4):
@@ -169,7 +169,7 @@ def search(question, index, chunks, top_k=4):
 
 def ask(history, context):
     client = Groq(api_key=GROQ_KEY)
-    system = f"""You answer questions about a PDF. Use only the context below.
+    system = f"""You answer questions about a Document. Use only the context below.
 Context: {context}"""
     messages = [{"role": "system", "content": system}]
     for m in history:
@@ -183,9 +183,9 @@ for k, v in {"messages": [], "index": None, "chunks": None, "pdf_name": None}.it
 
 with st.sidebar:
     st.markdown("### DocTalk")
-    st.caption("Ask questions about any PDF.")
+    st.caption("Ask questions about any Document.")
     st.divider()
-    st.markdown("**Upload a PDF**")
+    st.markdown("**Upload a Document**")
 
     uploaded = st.file_uploader("", type=["pdf", "docx", "doc", "txt", "rtf", "odt"], label_visibility="collapsed")
 
@@ -218,7 +218,7 @@ with st.sidebar:
             st.rerun()
 
 if not st.session_state.index:
-    st.markdown("## Ask anything about your PDF")
+    st.markdown("## Ask anything about your Document")
     st.caption("Upload a document in the sidebar to get started.")
 else:
     if not st.session_state.messages:
