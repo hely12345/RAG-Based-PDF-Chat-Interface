@@ -5,4 +5,4 @@ numpy
 groq
 markitdown
 python-dotenv
-markitdown[pdf]
+markitdown[all]
