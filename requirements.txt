@@ -1,0 +1,7 @@
+streamlit
+google-generativeai
+faiss-cpu
+numpy
+groq
+markitdown
+python-dotenv
