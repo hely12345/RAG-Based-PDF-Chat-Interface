@@ -109,9 +109,6 @@ section.main,
 </style>
 """, unsafe_allow_html=True)
 
-GEMINI_KEY = "AIzaSyDk2T8gkP3xJZbcL8bOH4otT2IBvvsd9LA"
-GROQ_KEY   = "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"
-
 gen.configure(api_key=GEMINI_KEY)
 
 def embedd(text, max_retries=3):
