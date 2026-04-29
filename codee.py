@@ -9,14 +9,14 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-GEMINI_KEY = st.secrets.get("GEMINI_KEY")
-GROQ_KEY = st.secrets.get("GROQ_KEY")
+GEMINI_KEY = os.getenv('GEMINI_KEY')
+GROQ_KEY = os.getenv('GROQ_KEY')
 
 if not GEMINI_KEY or not GROQ_KEY:
     st.error("API keys not found")
     st.stop()
 
-MAX_CHUNKS = 100
+MAX_CHUNKS_PER_DOC = 50  # Reduced to avoid rate limits
 
 st.set_page_config(page_title="DocTalk", page_icon="📄", layout="centered")
 st.markdown("""
@@ -111,38 +111,78 @@ section.main,
 
 gen.configure(api_key=GEMINI_KEY)
 
-def embedd(text, max_retries=3):
+def embedd(text, max_retries=5):
+    """Generate embeddings with rate limiting and retry logic"""
     for attempt in range(max_retries):
         try:
-            res = gen.embed_content(
-                model='models/gemini-embedding-001', 
-                content=text, 
-                task_type='retrieval_query'
-            )
+            # Add a small delay between requests to avoid hitting rate limits
+            if attempt > 0:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                time.sleep(0.1)  # Small delay even on first attempt
+            
+            res = gen.embed_content(model='models/gemini-embedding-001', content=text, task_type='retrieval_query')
             return np.array(res["embedding"], dtype="float32")
         except Exception as e:
+            error_msg = str(e)
+            
+            # Check if it's a rate limit error
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                # Extract wait time from error message if available
+                if "retry in" in error_msg.lower():
+                    import re
+                    match = re.search(r'retry in (\d+)', error_msg)
+                    if match:
+                        wait_time = int(match.group(1)) + 1
+                    else:
+                        wait_time = 60
+                else:
+                    wait_time = 60
+                
+                if attempt < max_retries - 1:
+                    st.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+            
             if attempt == max_retries - 1:
                 raise RuntimeError(f"Failed to generate embedding after {max_retries} attempts: {e}")
             time.sleep(2 ** attempt) 
 
 def split_chunks(text, chunk_size=500, overlap=50):
     chunks, start = [], 0
-    while start < len(text) and len(chunks) < MAX_CHUNKS:
+    while start < len(text) and len(chunks) < MAX_CHUNKS_PER_DOC:
         chunk = text[start:start + chunk_size]
         chunks.append(chunk)
         start += chunk_size - overlap
     
-    if len(chunks) >= MAX_CHUNKS:
-        st.warning(f"Document truncated to {MAX_CHUNKS} chunks due to size limits.")
+    if len(chunks) >= MAX_CHUNKS_PER_DOC:
+        st.warning(f"Document truncated to {MAX_CHUNKS_PER_DOC} chunks due to size limits.")
     
     return chunks
 
-def build_index(chunks):
+def build_index(all_chunks):
+    """Build a single FAISS index from all document chunks with progress tracking"""
     embeddings = []
-    for c in chunks:
+    total = len(all_chunks)
+    
+    # Create a progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, c in enumerate(all_chunks):
+        status_text.text(f"Processing chunk {idx + 1}/{total}...")
+        progress_bar.progress((idx + 1) / total)
+        
         emb = embedd(c)
         if emb is not None: 
             embeddings.append(emb)
+        
+        # Add a small delay every 10 chunks to avoid rate limits
+        if (idx + 1) % 10 == 0:
+            time.sleep(1)
+    
+    progress_bar.empty()
+    status_text.empty()
     
     if not embeddings:
         raise ValueError("No embeddings generated. Check the embedd function.")
@@ -153,8 +193,6 @@ def build_index(chunks):
     return index    
 
 def read_pdf(file_obj):
-    # reader = PdfReader(file_obj)
-    # text = "\n".join(p.extract_text() or "" for p in reader.pages)
     md = MarkItDown()
     result = md.convert(file_obj)
     text = result.text_content
@@ -167,9 +205,11 @@ def search(question, index, chunks, top_k=4):
     _, indices = index.search(q_emb, top_k)
     return [chunks[i] for i in indices[0]]
 
-def ask(history, context):
+def ask(history, context, doc_names):
     client = Groq(api_key=GROQ_KEY)
-    system = f"""You answer questions about a Document. Use only the context below.
+    doc_list = ", ".join(doc_names)
+    system = f"""You answer questions about documents. Use only the context below.
+Documents loaded: {doc_list}
 Context: {context}"""
     messages = [{"role": "system", "content": system}]
     for m in history:
@@ -177,53 +217,76 @@ Context: {context}"""
     res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=messages)
     return res.choices[0].message.content
 
-for k, v in {"messages": [], "index": None, "chunks": None, "pdf_name": None}.items():
+# Initialize session state
+for k, v in {"messages": [], "index": None, "chunks": None, "doc_names": []}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 with st.sidebar:
     st.markdown("### DocTalk")
-    st.caption("Ask questions about any Document.")
+    st.caption("Ask questions about multiple documents.")
     st.divider()
-    st.markdown("**Upload a Document**")
+    st.markdown("**Upload Documents**")
 
-    uploaded = st.file_uploader("", type=["pdf", "docx", "doc", "txt", "rtf", "odt"], label_visibility="collapsed")
+    uploaded_files = st.file_uploader(
+        "", 
+        type=["pdf", "docx", "doc", "txt", "rtf", "odt"], 
+        label_visibility="collapsed",
+        accept_multiple_files=True
+    )
 
-    if uploaded and uploaded.name != st.session_state.pdf_name:
+    if uploaded_files:
+        current_names = [f.name for f in uploaded_files]
+        
+        # Check if the uploaded files have changed
+        if current_names != st.session_state.doc_names:
+            # Check file sizes
+            oversized = [f.name for f in uploaded_files if f.size > 10 * 1024 * 1024]
+            if oversized:
+                st.error(f"Files too large: {', '.join(oversized)}. Max 10MB per file.")
+            else:
+                with st.spinner("Indexing documents…"):
+                    try:
+                        all_chunks = []
+                        
+                        # Process each document
+                        for uploaded_file in uploaded_files:
+                            text = read_pdf(uploaded_file)
+                            chunks = split_chunks(text)
+                            all_chunks.extend(chunks)
+                        
+                        # Build a single index from all chunks
+                        index = build_index(all_chunks)
+                        
+                        st.session_state.update(
+                            index=index, 
+                            chunks=all_chunks, 
+                            doc_names=current_names, 
+                            messages=[]
+                        )
+                        st.success(f"Indexed {len(uploaded_files)} document(s)!")
+                        
+                    except ValueError as e:
+                        st.error(f"{e}")
+                    except Exception as e:
+                        st.error(f"An unexpected error occurred: {e}")
 
-        if uploaded.size > 10 * 1024 * 1024:
-            st.error("File too large. Please upload a file smaller than 10MB.")
-        elif uploaded.name != st.session_state.pdf_name:
-            with st.spinner("Indexing…"):
-                try:
-                    text = read_pdf(uploaded)
-                    chunks = split_chunks(text) 
-                    index = build_index(chunks)
-                    
-                    st.session_state.update(index=index, chunks=chunks, pdf_name=uploaded.name, messages=[])
-                    st.success("Ready!")
-                    
-                except ValueError as e:
-                    # This catches the "No text extracted" error and shows it nicely
-                    st.error(f"{e}")
-                except Exception as e:
-                    # This catches any other unexpected errors
-                    st.error(f"An unexpected error occurred: {e}")
-
-    if st.session_state.pdf_name:
-        st.caption(f"**{st.session_state.pdf_name}**")
+    if st.session_state.doc_names:
+        st.caption("**Loaded documents:**")
+        for name in st.session_state.doc_names:
+            st.caption(f"• {name}")
         st.divider()
         if st.button("Clear chat"):
             st.session_state.messages = []
             st.rerun()
 
 if not st.session_state.index:
-    st.markdown("## Ask anything about your Document")
-    st.caption("Upload a document in the sidebar to get started.")
+    st.markdown("## Ask anything about your documents")
+    st.caption("Upload one or more documents in the sidebar to get started.")
 else:
     if not st.session_state.messages:
         st.markdown("## Ready — ask away")
-        st.caption(f"Loaded: **{st.session_state.pdf_name}**")
+        st.caption(f"Loaded **{len(st.session_state.doc_names)}** document(s)")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -238,7 +301,7 @@ if prompt := st.chat_input("Type your question…", disabled=st.session_state.in
         with st.spinner(""):
             results = search(prompt, st.session_state.index, st.session_state.chunks)
             context = "\n\n".join(results)
-            answer  = ask(st.session_state.messages, context)
+            answer = ask(st.session_state.messages, context, st.session_state.doc_names)
         st.write(answer)
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
