@@ -255,7 +255,6 @@ with st.sidebar:
                             chunks = split_chunks(text)
                             all_chunks.extend(chunks)
                         
-                        # Build a single index from all chunks
                         index = build_index(all_chunks)
                         
                         st.session_state.update(
@@ -264,7 +263,7 @@ with st.sidebar:
                             doc_names=current_names, 
                             messages=[]
                         )
-                        st.success(f"Indexed {len(uploaded_files)} document(s)!")
+                        st.success(f"Indexed {len(uploaded_files)} document(s)")
                         
                     except ValueError as e:
                         st.error(f"{e}")
