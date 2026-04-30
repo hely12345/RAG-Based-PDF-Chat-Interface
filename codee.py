@@ -224,7 +224,6 @@ for k, v in {"messages": [], "index": None, "chunks": None, "doc_names": []}.ite
         st.session_state[k] = v
 
 with st.sidebar:
-    st.markdown("### DocTalk")
     st.caption("Ask questions about multiple documents.")
     st.divider()
     st.markdown("**Upload Documents**")
