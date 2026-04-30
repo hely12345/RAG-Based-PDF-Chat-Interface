@@ -1,3 +1,4 @@
+
 import streamlit as st
 import google.generativeai as gen
 import faiss
@@ -18,7 +19,7 @@ if not GEMINI_KEY or not GROQ_KEY:
 
 MAX_CHUNKS_PER_DOC = 50  # Reduced to avoid rate limits
 
-st.set_page_config(page_title="DocTalk", page_icon="📄", layout="centered")
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
